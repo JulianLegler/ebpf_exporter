@@ -28,15 +28,19 @@ type Set struct {
 func NewSet() *Set {
 	return &Set{
 		decoders: map[string]Decoder{
-			"cgroup":     &CGroup{},
-			"ksym":       &KSym{},
-			"majorminor": &MajorMinor{},
-			"regexp":     &Regexp{},
-			"static_map": &StaticMap{},
-			"string":     &String{},
-			"dname":      &Dname{},
-			"uint":       &UInt{},
-			"inet_ip":    &InetIP{},
+			"cgroup":                &CGroup{},
+			"ksym":                  &KSym{},
+			"majorminor":            &MajorMinor{},
+			"regexp":                &Regexp{},
+			"static_map":            &StaticMap{},
+			"string":                &String{},
+			"dname":                 &Dname{},
+			"uint":                  &UInt{},
+			"inet_ip":               &InetIP{},
+			"kube_podnamespace":     &KubePodNamespace{},
+			"kube_podname":          &KubePodName{},
+			"kube_containername":    &KubeContainerName{},
+			"kube_containernamepid": &KubeContainerNameOrPid{},
 		},
 	}
 }
