@@ -1,18 +1,18 @@
 package decoder
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os"
-	"strings"
+	"log"
+	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/filters"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"github.com/iovisor/gobpf/bcc"
 
 	"github.com/cloudflare/ebpf_exporter/config"
-	"github.com/docker/docker/client"
 )
 
 const (
@@ -93,95 +93,70 @@ func (k *KubeContext) getKubeInfo(pid uint32) (info KubeInfo) {
 	info.kubePodName = DefaultKubeContextValue
 	info.kubeContainerName = DefaultKubeContextValue
 
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+
+	// creates the in-cluster config
+	config, err := rest.InClusterConfig()
 	if err != nil {
+		log.Printf("error creating in-cluster config: %v", err)
+		return
+	}
+	// creates the clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Printf("error creating clientset: %v", err)
 		return
 	}
 
-	// get all running docker containers
-	containers, err := cli.ContainerList(context.Background(), types.ContainerListOptions{})
+	// get pods in all the namespaces by omitting namespace
+	// Or specify namespace to get pods in particular namespace
+	pods, err := clientset.CoreV1().Pods("airflow").List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
+		log.Printf("error getting pods: %v", err)
 		return
 	}
+	log.Printf("There are %d pods in the cluster\n", len(pods.Items))
 
-	for _, container := range containers {
-		fmt.Printf("%s %s\n", container.ID[:10], container.Image)
-		if container.Labels != nil {
-			fmt.Printf("\t%s\n", container.Labels)
-			var tmp KubeInfo
-			tmp.kubePodNamespace = container.Labels["k8s-app"]
-			if tmp.kubePodNamespace == "" {
-				tmp.kubePodNamespace = DefaultKubeContextValue
-			}
-			tmp.kubePodName = container.Labels["role.minikube.sigs.k8s.io"]
-			if tmp.kubePodName == "" {
-				tmp.kubePodName = DefaultKubeContextValue
-			}
-			tmp.kubeContainerName = container.Labels["task_id"]
-			if tmp.kubeContainerName == "" {
-				tmp.kubeContainerName = DefaultKubeContextValue
-			}
-			k.kubeContext["0"] = tmp
 
-			if tmp.kubePodNamespace != DefaultKubeContextValue || tmp.kubePodName != DefaultKubeContextValue || tmp.kubeContainerName != DefaultKubeContextValue {
-				info = k.kubeContext["0"]
-				return
+	for _, pod := range pods.Items {
+		isFound := false
+		fmt.Printf("Labels for pod %s:\n", pod.Name)
+		for k, v := range pod.Labels {
+			fmt.Printf("   key: %s, value: %s\n", k, v)
+			if k == "dag_id" {
+				info.kubeContainerName = v
+				isFound = true
+			}
+			if k == "task_id" {
+				info.kubePodName = v
+				isFound = true
+			}
+			if k == "run_id" {
+				info.kubePodNamespace = v
+				isFound = true
 			}
 		}
+		if isFound == true {
+			return
+		}
+		 
 	}
-	info = k.kubeContext["0"]
+
+	// Examples for error handling:
+	// - Use helper functions e.g. errors.IsNotFound()
+	// - And/or cast to StatusError and use its properties like e.g. ErrStatus.Message
+	_, err = clientset.CoreV1().Pods("airflow").Get(context.TODO(), "example-xxxxx", metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		log.Printf("Pod example-xxxxx not found in default namespace\n")
+	} else if statusError, isStatus := err.(*errors.StatusError); isStatus {
+		log.Printf("Error getting pod %v\n", statusError.ErrStatus.Message)
+	} else if err != nil {
+		panic(err.Error())
+	} else {
+		log.Printf("Found example-xxxxx pod in default namespace\n")
+	}
+
+	time.Sleep(10 * time.Second)
+
 	return
-}
-
-// inspectKubeInfo use docker client library to get kubernetes labels value
-func (k *KubeContext) inspectKubeInfo(containerID string) (info KubeInfo) {
-	/// store more than 1000 container, need clean it for reduce memory use
-	if k.kubeContext == nil || len(k.kubeContext) > 1000 {
-		k.kubeContext = make(map[string]KubeInfo)
-	}
-	var ok bool
-	info, ok = k.kubeContext[containerID]
-	if ok {
-		return
-	}
-	cli, err := client.NewClientWithOpts(client.FromEnv)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if cerr := cli.Close(); cerr != nil {
-			err = cerr
-		}
-	}()
-	filters := filters.NewArgs()
-	if len(k.kubeContext) > 0 {
-		filters.Add("id", containerID)
-	}
-	containers, err := cli.ContainerList(context.Background(), types.ContainerListOptions{
-		Filters: filters,
-	})
-	if err != nil {
-		return
-	}
-
-	for _, container := range containers {
-		if container.Labels != nil {
-			var tmp KubeInfo
-			tmp.kubePodNamespace = container.Labels["io.kubernetes.pod.namespace"]
-			if tmp.kubePodNamespace == "" {
-				tmp.kubePodNamespace = DefaultKubeContextValue
-			}
-			tmp.kubePodName = container.Labels["io.kubernetes.pod.name"]
-			if tmp.kubePodName == "" {
-				tmp.kubePodName = DefaultKubeContextValue
-			}
-			tmp.kubeContainerName = container.Labels["io.kubernetes.container.name"]
-			if tmp.kubeContainerName == "" {
-				tmp.kubeContainerName = DefaultKubeContextValue
-			}
-			k.kubeContext[container.ID] = tmp
-		}
-	}
-	info = k.kubeContext[containerID]
-	return
+	
 }
