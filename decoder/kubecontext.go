@@ -1,162 +1,108 @@
 package decoder
-
 import (
-	"context"
-	"fmt"
+    "context"
+    "fmt"
 	"log"
-	"time"
-
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"github.com/iovisor/gobpf/bcc"
-
-	"github.com/cloudflare/ebpf_exporter/config"
+	"os"
+    "github.com/cloudflare/ebpf_exporter/config"
+    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/rest"
 )
-
 const (
-	// when fail get kubernetes labe fail use DefaultKubeContextValue  as default
-	DefaultKubeContextValue = "unknown"
+    // when fail get kubernetes labe fail use DefaultAirflowContextValue  as default
+    DefaultAirflowContextValue = "unknown"
 )
-
-// KubeInfo kubernetes context info
-type KubeInfo struct {
-	kubePodNamespace  string
-	kubePodName       string
-	kubeContainerName string
+type AirflowInfo struct {
+    dagId  string
+    taskId string
+    runId  string
 }
-
-// KubeContext kubernetes context info cache
-type KubeContext struct {
-	kubeContext map[string]KubeInfo
+type AirflowContext struct {
+    airflowContext map[string]AirflowInfo
 }
-
-// KubePodNamespace is a decoder that transforms pid representation into kubernetes pod namespace
-type KubePodNamespace struct {
-	ctx KubeContext
+type AirflowDagId struct {
+    ctx AirflowContext
 }
-
-// KubePodName is a decoder that transforms pid representation into kubernetes pod name
-type KubePodName struct {
-	ctx KubeContext
+type AirflowTaskId struct {
+    ctx AirflowContext
 }
-
-// KubeContainerName is a decoder that transforms pid representation into kubernetes pod container name
-type KubeContainerName struct {
-	ctx KubeContext
+type AirflowRunId struct {
+    ctx AirflowContext
 }
-
-// KubeContainerNameOrPid is a decoder that transforms pid representation into kubernetes pod container name or pid
-type KubeContainerNameOrPid struct {
-	ctx KubeContext
+func (i *AirflowDagId) Decode(in []byte, conf config.Decoder) ([]byte, error) {
+    info := i.ctx.getAirflowInfo()
+    b := []byte(info.dagId)
+    return b, nil
 }
-
-// Decode transforms pid representation into a kubernetes namespace and pod as string
-func (k *KubePodNamespace) Decode(in []byte, conf config.Decoder) ([]byte, error) {
-	byteOrder := bcc.GetHostByteOrder()
-	info := k.ctx.getKubeInfo(byteOrder.Uint32(in))
-	b := []byte(info.kubePodNamespace)
-	return b, nil
+func (i *AirflowTaskId) Decode(in []byte, conf config.Decoder) ([]byte, error) {
+    info := i.ctx.getAirflowInfo()
+    b := []byte(info.taskId)
+    return b, nil
 }
-
-// Decode transforms pid representation into a kubernetes pod name as string
-func (k *KubePodName) Decode(in []byte, conf config.Decoder) ([]byte, error) {
-	byteOrder := bcc.GetHostByteOrder()
-	info := k.ctx.getKubeInfo(byteOrder.Uint32(in))
-	b := []byte(info.kubePodName)
-	return b, nil
+func (i *AirflowRunId) Decode(in []byte, conf config.Decoder) ([]byte, error) {
+    info := i.ctx.getAirflowInfo()
+    b := []byte(info.runId)
+    return b, nil
 }
+func (a *AirflowContext) getAirflowInfo() (info AirflowInfo) {
+    // TODO not using AirflowContext
+    info.dagId = DefaultAirflowContextValue
+    info.taskId = DefaultAirflowContextValue
+    info.runId = DefaultAirflowContextValue
+    config, err := rest.InClusterConfig()
+    if err != nil {
+        panic(err.Error())
+    }
+    // creates the clientset
+    clientset, err := kubernetes.NewForConfig(config)
+    if err != nil {
+        panic(err.Error())
+    }
 
-// Decode transforms pid representation into a kubernetes container name as string
-func (k *KubeContainerName) Decode(in []byte, conf config.Decoder) ([]byte, error) {
-	byteOrder := bcc.GetHostByteOrder()
-	info := k.ctx.getKubeInfo(byteOrder.Uint32(in))
-	b := []byte(info.kubeContainerName)
-	return b, nil
-}
-
-// Decode transforms pid representation into a kubernetes container name, if no foud return pid instead
-func (k *KubeContainerNameOrPid) Decode(in []byte, conf config.Decoder) ([]byte, error) {
-	byteOrder := bcc.GetHostByteOrder()
-	info := k.ctx.getKubeInfo(byteOrder.Uint32(in))
-	if info.kubeContainerName == DefaultKubeContextValue {
-		info.kubeContainerName = fmt.Sprintf("pid-%d", byteOrder.Uint32(in))
-	}
-	b := []byte(info.kubeContainerName)
-	return b, nil
-}
-
-// getKubeInfo implement main logic convert container id to kubernetes context
-func (k *KubeContext) getKubeInfo(pid uint32) (info KubeInfo) {
-	info.kubePodNamespace = DefaultKubeContextValue
-	info.kubePodName = DefaultKubeContextValue
-	info.kubeContainerName = DefaultKubeContextValue
-
-
-	// creates the in-cluster config
-	config, err := rest.InClusterConfig()
+	// get hostname from local machine
+	hostname, err := os.Hostname()
+	localpods, err := clientset.CoreV1().Pods("kube-system").List(context.TODO(), metav1.ListOptions{
+		FieldSelector: "metadata.name=" + hostname,
+	})
 	if err != nil {
-		log.Printf("error creating in-cluster config: %v", err)
-		return
+		log.Printf("Failed to get pods with hostname as name: %v", err)
+		panic(err.Error())
 	}
-	// creates the clientset
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		log.Printf("error creating clientset: %v", err)
-		return
+	if len(localpods.Items) != 1 {
+		log.Printf("Error: more than one pod with hostname as name")
+		panic(err.Error())
 	}
+	pod := localpods.Items[0]
+	nodeName := pod.Spec.NodeName
+
+	log.Printf("nodeName: %s", nodeName)
+	
 
 	// get pods in all the namespaces by omitting namespace
 	// Or specify namespace to get pods in particular namespace
-	pods, err := clientset.CoreV1().Pods("airflow").List(context.TODO(), metav1.ListOptions{})
+	pods, err := clientset.CoreV1().Pods("airflow").List(context.TODO(), metav1.ListOptions{
+		FieldSelector: "spec.nodeName=" + nodeName,
+	})
 	if err != nil {
-		log.Printf("error getting pods: %v", err)
-		return
+		panic(err.Error())
 	}
-	log.Printf("There are %d pods in the cluster\n", len(pods.Items))
-
-
+	fmt.Printf("There are %d pods in the cluster\n", len(pods.Items))
 	for _, pod := range pods.Items {
-		isFound := false
-		fmt.Printf("Labels for pod %s:\n", pod.Name)
+		fmt.Printf("Found %s:\n", pod.Name)
 		for k, v := range pod.Labels {
-			fmt.Printf("   key: %s, value: %s\n", k, v)
 			if k == "dag_id" {
-				info.kubeContainerName = v
-				isFound = true
+				info.dagId = v
 			}
 			if k == "task_id" {
-				info.kubePodName = v
-				isFound = true
+				info.taskId = v
 			}
 			if k == "run_id" {
-				info.kubePodNamespace = v
-				isFound = true
+				info.runId = v
 			}
 		}
-		if isFound == true {
-			return
-		}
-		 
+		fmt.Printf("%s: dag_id \"%s\", task_id: \"%s\", run_id: \"%s\"\n", pod.Name, info.dagId, info.taskId, info.runId)
 	}
-
-	// Examples for error handling:
-	// - Use helper functions e.g. errors.IsNotFound()
-	// - And/or cast to StatusError and use its properties like e.g. ErrStatus.Message
-	_, err = clientset.CoreV1().Pods("airflow").Get(context.TODO(), "example-xxxxx", metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		log.Printf("Pod example-xxxxx not found in default namespace\n")
-	} else if statusError, isStatus := err.(*errors.StatusError); isStatus {
-		log.Printf("Error getting pod %v\n", statusError.ErrStatus.Message)
-	} else if err != nil {
-		panic(err.Error())
-	} else {
-		log.Printf("Found example-xxxxx pod in default namespace\n")
-	}
-
-	time.Sleep(10 * time.Second)
-
+    
 	return
-	
 }

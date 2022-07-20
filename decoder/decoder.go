@@ -37,10 +37,9 @@ func NewSet() *Set {
 			"dname":                 &Dname{},
 			"uint":                  &UInt{},
 			"inet_ip":               &InetIP{},
-			"kube_podnamespace":     &KubePodNamespace{},
-			"kube_podname":          &KubePodName{},
-			"kube_containername":    &KubeContainerName{},
-			"kube_containernamepid": &KubeContainerNameOrPid{},
+			"airflow_dag_id":     	 &AirflowDagId{},
+			"airflow_task_id":       &AirflowTaskId{},
+			"airflow_run_id":        &AirflowRunId{},
 		},
 	}
 }
